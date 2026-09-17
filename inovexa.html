@@ -243,6 +243,17 @@ h1{
   color:var(--muted);
 }
 
+.barValue{
+  position:absolute;
+  top:-18px;
+  width:100%;
+  text-align:center;
+  font-size:9px;
+  font-weight:700;
+  color:var(--teal);
+  white-space:nowrap;
+}
+
 .memoryBox{
   display:flex;
   align-items:center;
@@ -1011,7 +1022,7 @@ body.calmMode .stats{gap:22px}
     <div class="card statCard">
       <div class="label">GAMES PLAYED</div>
       <div class="stat" id="gamesPlayed">0</div>
-      <div class="label">Today</div>
+      <div class="label" id="gamesPlayedTime">Today</div>
     </div>
 
     <div class="card statCard">
@@ -1049,6 +1060,7 @@ body.calmMode .stats{gap:22px}
         <div class="bar" style="height:84%"><span>Sat</span></div>
         <div class="bar" id="todayBar" style="height:65%"><span>Today</span></div>
       </div>
+      <div class="label" id="weekTimeLabel" style="margin-top:34px;text-align:center">Total time this week: 0m</div>
     </div>
 
     <div class="card">
@@ -1326,33 +1338,71 @@ function saveLog(key,obj){
 
 let dailyLog=loadLog("cogninerDailyLog");     // {date: gamesCompletedThatDay}
 let memoryLog=loadLog("cogninerMemoryLog");   // {date: memoryScoreAsOfThatDay}
+let timeLog=loadLog("cogninerTimeLog");       // {date: minutesPlayedThatDay}
 
 function pruneLogs(){
  const cutoff=dateKeyOffset(30);
- [dailyLog,memoryLog].forEach(log=>{
+ [dailyLog,memoryLog,timeLog].forEach(log=>{
    Object.keys(log).forEach(k=>{ if(k<cutoff) delete log[k]; });
  });
  saveLog("cogninerDailyLog",dailyLog);
  saveLog("cogninerMemoryLog",memoryLog);
+ saveLog("cogninerTimeLog",timeLog);
 }
 
 function seedDemoHistoryIfEmpty(){
  if(Object.keys(dailyLog).length) return;
  const demoGames=[2,3,2,4,3,5];
  const demoMemory=[58,61,64,66,69,70];
+ const demoMinutes=[14,22,13,29,20,34];
  for(let i=6;i>=1;i--){
    const key=dateKeyOffset(i);
    dailyLog[key]=demoGames[6-i];
    memoryLog[key]=demoMemory[6-i];
+   timeLog[key]=demoMinutes[6-i];
  }
  saveLog("cogninerDailyLog",dailyLog);
  saveLog("cogninerMemoryLog",memoryLog);
+ saveLog("cogninerTimeLog",timeLog);
 }
 
 seedDemoHistoryIfEmpty();
 pruneLogs();
 
 let played=dailyLog[todayKey()]||0;
+
+/* =========================================================
+   PLAY TIME TRACKING
+   ========================================================= */
+
+function formatMinutes(mins){
+ const totalMin=Math.max(0,mins);
+ if(totalMin<1){
+   const secs=Math.round(totalMin*60);
+   return secs>0?secs+"s":"0m";
+ }
+ const rounded=Math.round(totalMin);
+ const h=Math.floor(rounded/60);
+ const m=rounded%60;
+ if(h>0) return h+"h"+(m>0?" "+m+"m":"");
+ return m+"m";
+}
+
+function addPlayTime(minutes){
+ if(!minutes || minutes<=0) return;
+ const key=todayKey();
+ timeLog[key]=(timeLog[key]||0)+minutes;
+ saveLog("cogninerTimeLog",timeLog);
+}
+
+function computeWeekMinutes(){
+ const days=[];
+ for(let i=6;i>=0;i--){
+   const key=dateKeyOffset(i);
+   days.push(timeLog[key]||0);
+ }
+ return days;
+}
 
 function computeStreak(){
  let streak=0,i=dailyLog[todayKey()]?0:1;
@@ -1386,13 +1436,30 @@ function updateStreakUI(){
 
 function updateWeekChartUI(){
  const bars=[...document.querySelectorAll(".bars .bar")];
- const counts=computeWeekBars();
- const maxCount=Math.max(1,...counts);
+ const minutesArr=computeWeekMinutes();
+ const maxMin=Math.max(1,...minutesArr);
  bars.forEach((bar,i)=>{
-   const c=counts[i]||0;
-   const height=c===0?8:Math.max(15,Math.round((c/maxCount)*100));
+   const m=minutesArr[i]||0;
+   const height=m===0?8:Math.max(15,Math.round((m/maxMin)*100));
    bar.style.height=height+"%";
+
+   let valEl=bar.querySelector(".barValue");
+   if(!valEl){
+     valEl=document.createElement("div");
+     valEl.className="barValue";
+     bar.insertBefore(valEl,bar.firstChild);
+   }
+   valEl.textContent=m>0?formatMinutes(m):"";
+   bar.title=formatMinutes(m)+" played";
  });
+
+ const totalWeekMin=minutesArr.reduce((a,b)=>a+b,0);
+ const weekTimeEl=document.getElementById("weekTimeLabel");
+ if(weekTimeEl) weekTimeEl.textContent="Total time this week: "+formatMinutes(totalWeekMin);
+
+ const todayMin=timeLog[todayKey()]||0;
+ const gamesPlayedTimeEl=document.getElementById("gamesPlayedTime");
+ if(gamesPlayedTimeEl) gamesPlayedTimeEl.textContent=todayMin>0?("Today · "+formatMinutes(todayMin)):"Today";
 }
 
 function updateWeeklyProgressUI(){
@@ -1812,6 +1879,7 @@ function openGame(type){
  if(nextBtn) nextBtn.style.display="none";
 
  window.currentGameType=type;
+ window.gameSessionStart=Date.now();
  startGame(type);
 }
 
@@ -1826,6 +1894,11 @@ function completeGame(points=1){
  dailyLog[key]=(dailyLog[key]||0)+1;
  saveLog("cogninerDailyLog",dailyLog);
  played=dailyLog[key];
+
+ const sessionStart=window.gameSessionStart||Date.now();
+ const elapsedMinutes=(Date.now()-sessionStart)/60000;
+ addPlayTime(elapsedMinutes);
+ window.gameSessionStart=Date.now();
 
  const gain=Math.max(1,Math.min(4,Math.round((points/100)*3)));
  memory=Math.min(100,memory+gain);
